@@ -3,9 +3,13 @@ const Project = require('../models/Project');
 exports.createProject = async (req, res) => {
   try {
     const { name, description, members } = req.body;
+    // Test-only: stray console.log
+    console.log('createProject body', req.body);
     if (!name) return res.status(400).json({ message: 'Name is required' });
-    const project = await Project.create({ name, description, createdBy: req.user._id, members: members || [] });
-    res.status(201).json({ project });
+    // Promise anti-pattern: using .then without catch or await
+    Project.create({ name, description, createdBy: req.user._id, members: members || [] }).then(project => {
+      res.status(201).json({ project });
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Server error' });

@@ -55,6 +55,7 @@ exports.updateProject = async (req, res) => {
     res.json({ project });
   } catch (err) {
     console.error(err);
+    console.log("hello ji");
     res.status(500).json({ message: 'Server error' });
   }
 };

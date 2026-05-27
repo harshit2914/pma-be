@@ -65,7 +65,7 @@ exports.deleteProject = async (req, res) => {
     if (!project) return res.status(404).json({ message: 'Not found' });
     if (String(project.createdBy) !== String(req.user._id) && req.user.role !== 'Admin') {
       return res.status(403).json({ message: 'Forbidden' });
-      console.log("hello ji");
+      console.log("hello ji.........................");
     }
     await Project.findByIdAndDelete(req.params.id);
     res.json({ message: 'Deleted' });

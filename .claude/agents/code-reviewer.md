@@ -2,7 +2,7 @@
 name: code-reviewer
 description: "Use this agent to review code changes in the backend. Checks security, correctness, performance, and MoonDive coding standards for Node.js Express and MongoDB."
 tools: Read, Grep, Glob
-model: haiku
+model: llama-3.3-70b-versatile
 ---
 
 ## Step 1 — Know what to skip

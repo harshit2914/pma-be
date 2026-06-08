@@ -1,118 +1,104 @@
-name: Gemini PR Review
-# Model: gemini-2.5-flash (free tier via Google AI Developer API)
-
+name: Groq PR Review
+# Model: llama-3.3-70b-versatile (free tier via Groq API)
 on:
   pull_request:
     types: [opened, synchronize, reopened]
   issue_comment:
     types: [created]
-
 jobs:
-  gemini-code-review:
-    name: Gemini Code Review
+  groq-code-review:
+    name: Groq Code Review
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     permissions:
       contents: read
       pull-requests: write
       issues: write
-
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Ensure review labels exist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh label create "review: high"        --color "b60205" --description "CRITICAL — PR blocked"     --repo ${{ github.repository }} --force
-          gh label create "review: medium-high" --color "e05d44" --description "HIGH — PR blocked"         --repo ${{ github.repository }} --force
-          gh label create "review: medium-low"  --color "f4a224" --description "MEDIUM — warning only"     --repo ${{ github.repository }} --force
-          gh label create "review: low"         --color "0075ca" --description "LOW — ok to merge"         --repo ${{ github.repository }} --force
-          gh label create "review: approved"    --color "0e8a16" --description "No issues — good to merge" --repo ${{ github.repository }} --force
-
+          gh label create "review: high"        --color "b60205" --description "CRITICAL - PR blocked"     --repo ${{ github.repository }} --force
+          gh label create "review: medium-high" --color "e05d44" --description "HIGH - PR blocked"         --repo ${{ github.repository }} --force
+          gh label create "review: medium-low"  --color "f4a224" --description "MEDIUM - warning only"     --repo ${{ github.repository }} --force
+          gh label create "review: low"         --color "0075ca" --description "LOW - ok to merge"         --repo ${{ github.repository }} --force
+          gh label create "review: approved"    --color "0e8a16" --description "No issues - good to merge" --repo ${{ github.repository }} --force
       - name: Get PR diff
-        id: diff
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }} > pr_diff.txt
           echo "Diff saved."
-
-      - name: Review PR with Gemini
-        id: gemini_review
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
+      - name: Write review script
         run: |
-          node - <<'NODESCRIPT'
+          cat > review.js << 'EOF'
           const fs = require('fs');
           const https = require('https');
-
-          const diff = fs.readFileSync('pr_diff.txt', 'utf8').slice(0, 28000); // stay within token limits
-
-          const prompt = `You are a senior code reviewer. Review the following PR diff carefully.
-
-          Identify issues across these categories: security vulnerabilities, bugs, performance problems, code style, and maintainability.
-
-          After your review, on the VERY LAST LINE of your response, output exactly one of these labels (nothing else on that line):
-          - review: high       (CRITICAL issues — must fix before merge)
-          - review: medium-high (HIGH issues — should fix before merge)
-          - review: medium-low  (MEDIUM issues — warnings, ok to merge with caution)
-          - review: low         (LOW issues — minor suggestions)
-          - review: approved    (No issues — good to merge)
-
-          PR Diff:
-          \`\`\`
-          ${diff}
-          \`\`\`
-          `;
-
+          const diff = fs.readFileSync('pr_diff.txt', 'utf8').slice(0, 28000);
+          const prompt = 'You are a senior code reviewer. Review the following PR diff carefully.\n\n'
+            + 'Identify issues across these categories: security vulnerabilities, bugs, performance problems, code style, and maintainability.\n\n'
+            + 'After your review, on the VERY LAST LINE of your response, output exactly one of these labels (nothing else on that line):\n'
+            + 'review: high\n'
+            + 'review: medium-high\n'
+            + 'review: medium-low\n'
+            + 'review: low\n'
+            + 'review: approved\n\n'
+            + 'Where:\n'
+            + '- review: high        = CRITICAL issues, must fix before merge\n'
+            + '- review: medium-high = HIGH issues, should fix before merge\n'
+            + '- review: medium-low  = MEDIUM issues, ok to merge with caution\n'
+            + '- review: low         = minor suggestions only\n'
+            + '- review: approved    = no issues, good to merge\n\n'
+            + 'PR Diff:\n```\n' + diff + '\n```';
           const body = JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
+            model: 'llama-3.3-70b-versatile',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.2,
+            max_tokens: 2048
           });
-
           const options = {
-            hostname: 'generativelanguage.googleapis.com',
-            path: `/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+            hostname: 'api.groq.com',
+            path: '/openai/v1/chat/completions',
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ' + process.env.GROQ_API_KEY,
+              'Content-Length': Buffer.byteLength(body)
+            }
           };
-
-          const req = https.request(options, (res) => {
+          const req = https.request(options, function(res) {
             let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
+            res.on('data', function(chunk) { data += chunk; });
+            res.on('end', function() {
               try {
                 const parsed = JSON.parse(data);
-                const review = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (!review) { console.error('No review text from Gemini:', data); process.exit(1); }
-
-                // Extract label from last non-empty line
-                const lines = review.trim().split('\n').filter(l => l.trim());
+                const review = parsed.choices[0].message.content;
+                if (!review) { console.error('No review text:', data); process.exit(1); }
+                const lines = review.trim().split('\n').filter(function(l) { return l.trim(); });
                 const lastLine = lines[lines.length - 1].trim();
                 const validLabels = ['review: high', 'review: medium-high', 'review: medium-low', 'review: low', 'review: approved'];
-                const label = validLabels.find(l => lastLine.includes(l)) || 'review: low';
-
+                const label = validLabels.find(function(l) { return lastLine.includes(l); }) || 'review: low';
                 fs.writeFileSync('review_comment.txt', review);
                 fs.writeFileSync('review_label.txt', label);
-                console.log('Review complete. Label:', label);
-              } catch (e) {
+                console.log('Review complete. Label: ' + label);
+              } catch(e) {
                 console.error('Parse error:', e, data);
                 process.exit(1);
               }
             });
           });
-
-          req.on('error', e => { console.error(e); process.exit(1); });
+          req.on('error', function(e) { console.error(e); process.exit(1); });
           req.write(body);
           req.end();
-          NODESCRIPT
-
+          EOF
+      - name: Review PR with Groq
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: node review.js
       - name: Post review comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -120,7 +106,6 @@ jobs:
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
             --body-file review_comment.txt
-
       - name: Apply severity label
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -135,7 +120,6 @@ jobs:
           gh pr edit ${{ github.event.pull_request.number }} \
             --add-label "$LABEL" \
             --repo ${{ github.repository }}
-
       - name: Severity gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -144,124 +128,112 @@ jobs:
             --repo ${{ github.repository }} \
             --json labels \
             --jq '[.labels[].name] | join(" ")' 2>/dev/null || echo "")
-
           echo "Labels: $LABELS"
-
           if echo "$LABELS" | grep -qF "review: high"; then
-            echo "BLOCKED — CRITICAL issues found."
+            echo "BLOCKED - CRITICAL issues found."
             exit 1
           fi
-
           if echo "$LABELS" | grep -qF "review: medium-high"; then
-            echo "BLOCKED — HIGH issues found."
+            echo "BLOCKED - HIGH issues found."
             exit 1
           fi
-
           echo "Gate passed."
-
-  gemini-on-demand-review:
-    name: Gemini On-Demand Review
+  groq-on-demand-review:
+    name: Groq On-Demand Review
     runs-on: ubuntu-latest
-    if: |
+    if: >
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request != null &&
-      contains(github.event.comment.body, '@gemini review')
+      contains(github.event.comment.body, '@groq review')
     permissions:
       contents: read
       pull-requests: write
       issues: write
-
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Ensure review labels exist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh label create "review: high"        --color "b60205" --description "CRITICAL — PR blocked"     --repo ${{ github.repository }} --force
-          gh label create "review: medium-high" --color "e05d44" --description "HIGH — PR blocked"         --repo ${{ github.repository }} --force
-          gh label create "review: medium-low"  --color "f4a224" --description "MEDIUM — warning only"     --repo ${{ github.repository }} --force
-          gh label create "review: low"         --color "0075ca" --description "LOW — ok to merge"         --repo ${{ github.repository }} --force
-          gh label create "review: approved"    --color "0e8a16" --description "No issues — good to merge" --repo ${{ github.repository }} --force
-
+          gh label create "review: high"        --color "b60205" --description "CRITICAL - PR blocked"     --repo ${{ github.repository }} --force
+          gh label create "review: medium-high" --color "e05d44" --description "HIGH - PR blocked"         --repo ${{ github.repository }} --force
+          gh label create "review: medium-low"  --color "f4a224" --description "MEDIUM - warning only"     --repo ${{ github.repository }} --force
+          gh label create "review: low"         --color "0075ca" --description "LOW - ok to merge"         --repo ${{ github.repository }} --force
+          gh label create "review: approved"    --color "0e8a16" --description "No issues - good to merge" --repo ${{ github.repository }} --force
       - name: Get PR diff
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr diff ${{ github.event.issue.number }} --repo ${{ github.repository }} > pr_diff.txt
           echo "Diff saved."
-
-      - name: Review PR with Gemini
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Write review script
         run: |
-          node - <<'NODESCRIPT'
+          cat > review.js << 'EOF'
           const fs = require('fs');
           const https = require('https');
-
           const diff = fs.readFileSync('pr_diff.txt', 'utf8').slice(0, 28000);
-
-          const prompt = `You are a senior code reviewer. Review the following PR diff carefully.
-
-          Identify issues across these categories: security vulnerabilities, bugs, performance problems, code style, and maintainability.
-
-          After your review, on the VERY LAST LINE of your response, output exactly one of these labels (nothing else on that line):
-          - review: high       (CRITICAL issues — must fix before merge)
-          - review: medium-high (HIGH issues — should fix before merge)
-          - review: medium-low  (MEDIUM issues — warnings, ok to merge with caution)
-          - review: low         (LOW issues — minor suggestions)
-          - review: approved    (No issues — good to merge)
-
-          PR Diff:
-          \`\`\`
-          ${diff}
-          \`\`\`
-          `;
-
+          const prompt = 'You are a senior code reviewer. Review the following PR diff carefully.\n\n'
+            + 'Identify issues across these categories: security vulnerabilities, bugs, performance problems, code style, and maintainability.\n\n'
+            + 'After your review, on the VERY LAST LINE of your response, output exactly one of these labels (nothing else on that line):\n'
+            + 'review: high\n'
+            + 'review: medium-high\n'
+            + 'review: medium-low\n'
+            + 'review: low\n'
+            + 'review: approved\n\n'
+            + 'Where:\n'
+            + '- review: high        = CRITICAL issues, must fix before merge\n'
+            + '- review: medium-high = HIGH issues, should fix before merge\n'
+            + '- review: medium-low  = MEDIUM issues, ok to merge with caution\n'
+            + '- review: low         = minor suggestions only\n'
+            + '- review: approved    = no issues, good to merge\n\n'
+            + 'PR Diff:\n```\n' + diff + '\n```';
           const body = JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
+            model: 'llama-3.3-70b-versatile',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.2,
+            max_tokens: 2048
           });
-
           const options = {
-            hostname: 'generativelanguage.googleapis.com',
-            path: `/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+            hostname: 'api.groq.com',
+            path: '/openai/v1/chat/completions',
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ' + process.env.GROQ_API_KEY,
+              'Content-Length': Buffer.byteLength(body)
+            }
           };
-
-          const req = https.request(options, (res) => {
+          const req = https.request(options, function(res) {
             let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
+            res.on('data', function(chunk) { data += chunk; });
+            res.on('end', function() {
               try {
                 const parsed = JSON.parse(data);
-                const review = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (!review) { console.error('No review text from Gemini:', data); process.exit(1); }
-
-                const lines = review.trim().split('\n').filter(l => l.trim());
+                const review = parsed.choices[0].message.content;
+                if (!review) { console.error('No review text:', data); process.exit(1); }
+                const lines = review.trim().split('\n').filter(function(l) { return l.trim(); });
                 const lastLine = lines[lines.length - 1].trim();
                 const validLabels = ['review: high', 'review: medium-high', 'review: medium-low', 'review: low', 'review: approved'];
-                const label = validLabels.find(l => lastLine.includes(l)) || 'review: low';
-
+                const label = validLabels.find(function(l) { return lastLine.includes(l); }) || 'review: low';
                 fs.writeFileSync('review_comment.txt', review);
                 fs.writeFileSync('review_label.txt', label);
-                console.log('Review complete. Label:', label);
-              } catch (e) {
+                console.log('Review complete. Label: ' + label);
+              } catch(e) {
                 console.error('Parse error:', e, data);
                 process.exit(1);
               }
             });
           });
-
-          req.on('error', e => { console.error(e); process.exit(1); });
+          req.on('error', function(e) { console.error(e); process.exit(1); });
           req.write(body);
           req.end();
-          NODESCRIPT
-
+          EOF
+      - name: Review PR with Groq
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: node review.js
       - name: Post review comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -269,7 +241,6 @@ jobs:
           gh pr comment ${{ github.event.issue.number }} \
             --repo ${{ github.repository }} \
             --body-file review_comment.txt
-
       - name: Apply severity label
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -284,7 +255,6 @@ jobs:
           gh pr edit ${{ github.event.issue.number }} \
             --add-label "$LABEL" \
             --repo ${{ github.repository }}
-
       - name: Severity gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -293,17 +263,13 @@ jobs:
             --repo ${{ github.repository }} \
             --json labels \
             --jq '[.labels[].name] | join(" ")' 2>/dev/null || echo "")
-
           echo "Labels: $LABELS"
-
           if echo "$LABELS" | grep -qF "review: high"; then
-            echo "BLOCKED — CRITICAL issues found."
+            echo "BLOCKED - CRITICAL issues found."
             exit 1
           fi
-
           if echo "$LABELS" | grep -qF "review: medium-high"; then
-            echo "BLOCKED — HIGH issues found."
+            echo "BLOCKED - HIGH issues found."
             exit 1
           fi
-
           echo "Gate passed."

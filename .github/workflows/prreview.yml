@@ -1,5 +1,5 @@
 name: Groq PR Review
-# Model: llama-3.3-70b-versatile (free tier via Groq API)
+# Model: llama-3.3-70b-versatile 
 on:
   pull_request:
     types: [opened, synchronize, reopened]

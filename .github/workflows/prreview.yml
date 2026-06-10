@@ -1,5 +1,5 @@
-name: Groq PR Review
-# Model: meta-llama/llama-4-maverick-17b-128e-instruct (free tier via Groq)
+name: Gemini PR Review
+# Model: gemini-2.5-flash (free tier via Google AI Studio)
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -7,8 +7,8 @@ on:
     types: [created]
 
 jobs:
-  groq-code-review:
-    name: Groq Code Review
+  gemini-code-review:
+    name: Gemini Code Review
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     permissions:
@@ -46,12 +46,12 @@ jobs:
 
           const diff = fs.readFileSync('pr_diff.txt', 'utf8').slice(0, 30000);
 
-          const promptLines = [
+          const prompt = [
             'You are a senior software engineer doing a thorough code review of a PR diff.',
             '',
             'Start with a one-sentence summary: what this PR changes and how many files are affected.',
             '',
-            'Then output issues grouped into these two sections (only include a section if it has issues):',
+            'Then output issues grouped into these sections (only include a section if it has issues):',
             '',
             '## Critical Issues',
             'For each CRITICAL or HIGH severity issue, number it and write:',
@@ -63,7 +63,7 @@ jobs:
             'Then 1-2 sentences: what exactly breaks or what security risk this introduces at runtime.',
             '',
             '## Moderate Issues',
-            'For each MEDIUM or LOW severity issue, number it (continuing the count from Critical) and write:',
+            'For each MEDIUM or LOW severity issue, number it (continuing from Critical) and write:',
             '**N. Short descriptive title** `path/to/file.js:lineNumber`',
             '```diff',
             '- the bad line(s) from the diff',
@@ -72,50 +72,52 @@ jobs:
             'Then 1 sentence: why it matters.',
             '',
             '## Verdict',
-            'State which issue numbers are blocking merge. If none are blocking, say the PR is safe to merge.',
+            'State which issue numbers are blocking merge and must be fixed. If none are blocking, say the PR is safe to merge.',
             '',
-            'Severity classification:',
+            'Severity classification rules:',
             '- CRITICAL: hardcoded secret, API key, password, or credential committed in code',
-            '- HIGH: async function missing try/catch, auth middleware removed from a protected route, global error handler disabled, unhandled promise rejection risk, password stored without hashing',
-            '- MEDIUM: hardcoded string where an enum/constant exists, public route with no rate limiter, list endpoint with no pagination, N+1 database query, dead import after route removal',
-            '- LOW: console.log in production code, TODO/FIXME comment, magic number, deprecated method',
+            '- HIGH: async function missing try/catch, auth middleware removed from a protected route, global error handler disabled, unhandled promise rejection, password stored or compared without hashing',
+            '- MEDIUM: hardcoded string where an enum/constant exists, public route with no rate limiter, list endpoint returning all records with no pagination, N+1 database query, dead import left after removing a route',
+            '- LOW: console.log left in production code, TODO/FIXME comment, magic number without a named constant, deprecated library method used',
             '',
-            'VERY LAST LINE must be exactly one of these (nothing else on that line):',
+            'VERY LAST LINE of your response must be exactly one of these labels (nothing else on that line):',
             'review: high',
             'review: medium-high',
             'review: medium-low',
             'review: low',
             'review: approved',
             '',
-            'Where:',
+            'Label rules:',
             '- review: high        = any CRITICAL or HIGH issue found',
-            '- review: medium-high = highest is HIGH, no CRITICAL',
-            '- review: medium-low  = highest is MEDIUM',
-            '- review: low         = only LOW issues',
+            '- review: medium-high = highest found is HIGH, no CRITICAL',
+            '- review: medium-low  = highest found is MEDIUM',
+            '- review: low         = only LOW issues found',
             '- review: approved    = no issues at all',
             '',
             'PR Diff:',
             '```',
             diff,
             '```'
-          ];
-
-          const prompt = promptLines.join('\n');
+          ].join('\n');
 
           const body = JSON.stringify({
-            model: 'meta-llama/llama-4-maverick-17b-128e-instruct',
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.1,
-            max_tokens: 4096
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 4096
+            }
           });
 
+          const apiKey = process.env.GEMINI_API_KEY;
+          const model = 'gemini-2.5-flash';
+          const path = '/v1beta/models/' + model + ':generateContent?key=' + apiKey;
+
           const options = {
-            hostname: 'api.groq.com',
-            path: '/openai/v1/chat/completions',
+            hostname: 'generativelanguage.googleapis.com',
+            path: path,
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': 'Bearer ' + process.env.GROQ_API_KEY,
               'Content-Length': Buffer.byteLength(body)
             }
           };
@@ -127,10 +129,10 @@ jobs:
               try {
                 const parsed = JSON.parse(data);
                 if (parsed.error) {
-                  console.error('Groq API error:', JSON.stringify(parsed.error));
+                  console.error('Gemini API error:', JSON.stringify(parsed.error));
                   process.exit(1);
                 }
-                const review = parsed.choices[0].message.content;
+                const review = parsed.candidates[0].content.parts[0].text;
                 if (!review) { console.error('No review text in response:', data); process.exit(1); }
 
                 const lines = review.trim().split('\n').filter(function(l) { return l.trim(); });
@@ -154,9 +156,9 @@ jobs:
           req.end();
           EOF
 
-      - name: Review PR with Groq
+      - name: Review PR with Gemini
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: node review.js
 
       - name: Post review comment
@@ -201,13 +203,13 @@ jobs:
           fi
           echo "Gate passed."
 
-  groq-on-demand-review:
-    name: Groq On-Demand Review
+  gemini-on-demand-review:
+    name: Gemini On-Demand Review
     runs-on: ubuntu-latest
     if: >
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request != null &&
-      contains(github.event.comment.body, '@groq review')
+      contains(github.event.comment.body, '@gemini review')
     permissions:
       contents: read
       pull-requests: write
@@ -243,12 +245,12 @@ jobs:
 
           const diff = fs.readFileSync('pr_diff.txt', 'utf8').slice(0, 30000);
 
-          const promptLines = [
+          const prompt = [
             'You are a senior software engineer doing a thorough code review of a PR diff.',
             '',
             'Start with a one-sentence summary: what this PR changes and how many files are affected.',
             '',
-            'Then output issues grouped into these two sections (only include a section if it has issues):',
+            'Then output issues grouped into these sections (only include a section if it has issues):',
             '',
             '## Critical Issues',
             'For each CRITICAL or HIGH severity issue, number it and write:',
@@ -260,7 +262,7 @@ jobs:
             'Then 1-2 sentences: what exactly breaks or what security risk this introduces at runtime.',
             '',
             '## Moderate Issues',
-            'For each MEDIUM or LOW severity issue, number it (continuing the count from Critical) and write:',
+            'For each MEDIUM or LOW severity issue, number it (continuing from Critical) and write:',
             '**N. Short descriptive title** `path/to/file.js:lineNumber`',
             '```diff',
             '- the bad line(s) from the diff',
@@ -269,50 +271,52 @@ jobs:
             'Then 1 sentence: why it matters.',
             '',
             '## Verdict',
-            'State which issue numbers are blocking merge. If none are blocking, say the PR is safe to merge.',
+            'State which issue numbers are blocking merge and must be fixed. If none are blocking, say the PR is safe to merge.',
             '',
-            'Severity classification:',
+            'Severity classification rules:',
             '- CRITICAL: hardcoded secret, API key, password, or credential committed in code',
-            '- HIGH: async function missing try/catch, auth middleware removed from a protected route, global error handler disabled, unhandled promise rejection risk, password stored without hashing',
-            '- MEDIUM: hardcoded string where an enum/constant exists, public route with no rate limiter, list endpoint with no pagination, N+1 database query, dead import after route removal',
-            '- LOW: console.log in production code, TODO/FIXME comment, magic number, deprecated method',
+            '- HIGH: async function missing try/catch, auth middleware removed from a protected route, global error handler disabled, unhandled promise rejection, password stored or compared without hashing',
+            '- MEDIUM: hardcoded string where an enum/constant exists, public route with no rate limiter, list endpoint returning all records with no pagination, N+1 database query, dead import left after removing a route',
+            '- LOW: console.log left in production code, TODO/FIXME comment, magic number without a named constant, deprecated library method used',
             '',
-            'VERY LAST LINE must be exactly one of these (nothing else on that line):',
+            'VERY LAST LINE of your response must be exactly one of these labels (nothing else on that line):',
             'review: high',
             'review: medium-high',
             'review: medium-low',
             'review: low',
             'review: approved',
             '',
-            'Where:',
+            'Label rules:',
             '- review: high        = any CRITICAL or HIGH issue found',
-            '- review: medium-high = highest is HIGH, no CRITICAL',
-            '- review: medium-low  = highest is MEDIUM',
-            '- review: low         = only LOW issues',
+            '- review: medium-high = highest found is HIGH, no CRITICAL',
+            '- review: medium-low  = highest found is MEDIUM',
+            '- review: low         = only LOW issues found',
             '- review: approved    = no issues at all',
             '',
             'PR Diff:',
             '```',
             diff,
             '```'
-          ];
-
-          const prompt = promptLines.join('\n');
+          ].join('\n');
 
           const body = JSON.stringify({
-            model: 'meta-llama/llama-4-maverick-17b-128e-instruct',
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.1,
-            max_tokens: 4096
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 4096
+            }
           });
 
+          const apiKey = process.env.GEMINI_API_KEY;
+          const model = 'gemini-2.5-flash';
+          const path = '/v1beta/models/' + model + ':generateContent?key=' + apiKey;
+
           const options = {
-            hostname: 'api.groq.com',
-            path: '/openai/v1/chat/completions',
+            hostname: 'generativelanguage.googleapis.com',
+            path: path,
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': 'Bearer ' + process.env.GROQ_API_KEY,
               'Content-Length': Buffer.byteLength(body)
             }
           };
@@ -324,10 +328,10 @@ jobs:
               try {
                 const parsed = JSON.parse(data);
                 if (parsed.error) {
-                  console.error('Groq API error:', JSON.stringify(parsed.error));
+                  console.error('Gemini API error:', JSON.stringify(parsed.error));
                   process.exit(1);
                 }
-                const review = parsed.choices[0].message.content;
+                const review = parsed.candidates[0].content.parts[0].text;
                 if (!review) { console.error('No review text in response:', data); process.exit(1); }
 
                 const lines = review.trim().split('\n').filter(function(l) { return l.trim(); });
@@ -351,9 +355,9 @@ jobs:
           req.end();
           EOF
 
-      - name: Review PR with Groq
+      - name: Review PR with Gemini
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: node review.js
 
       - name: Post review comment

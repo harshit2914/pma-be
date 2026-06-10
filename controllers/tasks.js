@@ -67,7 +67,7 @@ exports.deleteTask = async (req, res) => {
     if (req.user.role !== 'Admin') return res.status(403).json({ message: 'Forbidden' });
     await Task.findByIdAndDelete(req.params.id);
     res.json({ message: 'Deleted' });
-
+ } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Server error' });
   }

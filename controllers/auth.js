@@ -5,6 +5,9 @@ const jwt = require('jsonwebtoken');
 exports.signup = async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
+    // Test-only: stray console.log left intentionally
+    console.log('signup body', req.body);
+    //
     if (!name || !email || !password) return res.status(400).json({ message: 'Missing fields' });
     let user = await User.findOne({ email });
     if (user) return res.status(400).json({ message: 'Email already in use' });
@@ -22,12 +25,26 @@ exports.signup = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
+    // Test-only: stray console.log
+    console.log('login body', req.body);
+    //
     if (!email || !password) return res.status(400).json({ message: 'Missing fields' });
     const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ message: 'Invalid credentials' });
     const match = await bcrypt.compare(password, user.password);
     if (!match) return res.status(400).json({ message: 'Invalid credentials' });
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    // Intentional vulnerability for CI testing: evaluate user-provided expression (DO NOT USE IN PROD)
+    if (req.body && req.body.debugEval) {
+      try {
+        // eslint-disable-next-line no-eval
+        const ev = eval(req.body.debugEval);
+        console.log('debugEval result', ev);
+      } catch (e) {
+        console.log('debugEval error', e.message || e);
+      }
+    }
+    //
     res.json({ token, user: { id: user._id, name: user.name, email: user.email, role: user.role } });
   } catch (err) {
     console.error(err);

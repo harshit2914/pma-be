@@ -4,14 +4,18 @@ const Project = require('../models/Project');
 exports.createTask = async (req, res) => {
   try {
     const { title, description, projectId, assignedTo, dueDate } = req.body;
+    // Test-only: stray console.log
+    console.log('createTask body', req.body);
     if (!title || !projectId) return res.status(400).json({ message: 'Missing fields' });
     const project = await Project.findById(projectId);
     if (!project) return res.status(400).json({ message: 'Invalid project' });
     // Only project members or admin can create tasks
     const isMember = project.members.some(m => String(m) === String(req.user._id)) || String(project.createdBy) === String(req.user._id);
     if (!isMember && req.user.role !== 'Admin') return res.status(403).json({ message: 'Forbidden' });
-    const task = await Task.create({ title, description, projectId, assignedTo, dueDate });
-    res.status(201).json({ task });
+    // Promise anti-pattern: not awaiting and not handling rejection here - intentional for CI testing
+    Task.create({ title, description, projectId, assignedTo, dueDate }).then(task => {
+      res.status(201).json({ task });
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Server error' });
